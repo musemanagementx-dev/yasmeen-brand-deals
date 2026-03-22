@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Brand Deals — @yasmeenikole</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'DM Sans', sans-serif; background: #0D0D0F; color: #F0EEE8; min-height: 100vh; }
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Playfair+Display:wght@700&display=swap');
+  ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: #1a1a1e; } ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+  input, textarea, select, button { font-family: 'DM Sans', sans-serif; }
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 500; }
+  .card { background: #17171C; border: 1px solid #222; border-radius: 16px; padding: 16px 20px; cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; }
+  .card:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
+  .pill { border: 1px solid #333; border-radius: 20px; padding: 5px 14px; font-size: 12px; cursor: pointer; background: transparent; color: #999; transition: all 0.15s; }
+  .pill.active { background: #C9A84C; color: #0D0D0F; border-color: #C9A84C; }
+  button { background: transparent; border: 1px solid #333; border-radius: 10px; padding: 9px 16px; color: #F0EEE8; cursor: pointer; font-size: 13px; transition: all 0.15s; }
+  button:hover { background: #1e1e24; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  input, select, textarea { background: #0D0D0F; border: 1px solid #2a2a30; border-radius: 10px; padding: 9px 13px; color: #F0EEE8; font-size: 13px; width: 100%; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: #C9A84C; }
+  textarea { resize: vertical; min-height: 54px; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+  .modal { background: #17171C; border: 1px solid #2a2a30; border-radius: 20px; padding: 28px; width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; }
+  label.lbl { font-size: 11px; color: #888; display: block; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1px; }
+  .stat { background: #17171C; border-radius: 10px; padding: 10px 16px; border: 1px solid #222; min-width: 100px; }
+  .sync-ok  { background: #0a2a1a; color: #22C07A; border: 1px solid #1a4a2a; border-radius: 8px; padding: 5px 12px; font-size: 12px; }
+  .sync-err { background: #2a0a0a; color: #E84040; border: 1px solid #4a1a1a; border-radius: 8px; padding: 5px 12px; font-size: 12px; }
+  .tag-gmail { font-size: 10px; color: #555; border: 1px solid #2a2a30; border-radius: 4px; padding: 1px 5px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { display: inline-block; animation: spin 0.8s linear infinite; }
+</style>
+</head>
+<body>
+<div id="app" style="max-width:900px;margin:0 auto;padding:32px 24px 60px;"></div>
+
+<script>
+const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQNvvfcTiTTrNSuCzZxmHvgbOZliXzi8Vvv9YCGgjXVGAgFU27Cgvn40spia45lvEUnOX5j0MoEmFeB/pub?gid=0&single=true&output=csv";
+const STATUSES = ["Open Offer","Negotiating","Active","Completed","Declined"];
+const SC = {
+  "Open Offer":  { bg:"#FFF4D6", text:"#A0660A", dot:"#F5A623" },
+  "Negotiating": { bg:"#E8F0FF", text:"#2B4DB8", dot:"#378ADD" },
+  "Active":      { bg:"#D6F5E8", text:"#0A6640", dot:"#1D9E75" },
+  "Completed":   { bg:"#2a2a2a", text:"#888",    dot:"#888" },
+  "Declined":    { bg:"#FFE8E8", text:"#A01010", dot:"#E84040" },
+};
+
+let state = {
+  deals: tryLoad(),
+  filter: "All", search: "",
+  modal: null, form: emptyDeal(),
+  syncing: false, syncMsg: "", syncOk: true,
+  lastSync: localStorage.getItem("yk_last_sync") || "",
+  confirmDelete: false,
+};
+
+function tryLoad() { try { return JSON.parse(localStorage.getItem("yk_deals")||"[]"); } catch { return []; } }
+function trySave() { try { localStorage.setItem("yk_deals", JSON.stringify(state.deals)); } catch {} }
+function emptyDeal() { return { id: Date.now(), brand:"", contact:"", email:"", value:"", deliverables:"", deadline:"", status:"Open Offer", notes:"" }; }
+function fmt(v) { const n=parseFloat(String(v||"").replace(/[^0-9.]/g,"")); return isNaN(n)?v:"$"+n.toLocaleString(); }
+function esc(s) { return String(s||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
+
+function parseCSV(text) {
+  const lines = text.trim().split("\n");
+  if (lines.length < 2) return [];
+  return lines.slice(1).map((line, i) => {
+    const cols = []; let cur = "", inQ = false;
+    for (let c of line) {
+      if (c==='"') { inQ=!inQ; }
+      else if (c===',' && !inQ) { cols.push(cur.trim()); cur=""; }
+      else { cur+=c; }
+    }
+    cols.push(cur.trim());
+    return {
+      id: `sheet_${i}_${(cols[1]||"").replace(/\W/g,"_")}`,
+      brand: cols[1]||"", contact: cols[2]||"", email: cols[3]||"",
+      status: STATUSES.includes(cols[5])?cols[5]:"Open Offer",
+      value: cols[6]||"", deadline: cols[7]||"", deliverables: cols[8]||"", notes: cols[9]||"",
+    };
+  }).filter(d => d.brand);
+}
+
+async function doSync() {
+  state.syncing=true; state.syncMsg=""; render();
+  try {
+    const res = await fetch(CSV_URL);
+    if (!res.ok) throw new Error("HTTP "+res.status);
+    const text = await res.text();
+    const incoming = parseCSV(text);
+    if (incoming.length===0) { state.syncMsg="No rows found."; state.syncOk=true; }
+    else {
+      const manual = state.deals.filter(d=>!String(d.id).startsWith("sheet_"));
+      const manualBrands = new Set(manual.map(d=>d.brand.toLowerCase()));
+      const existIds = new Set(state.deals.filter(d=>String(d.id).startsWith("sheet_")).map(d=>d.id));
+      const fresh = incoming.filter(d=>!manualBrands.has(d.brand.toLowerCase())&&!existIds.has(d.id));
+      const updated = state.deals.filter(d=>String(d.id).startsWith("sheet_")).map(ex=>{
+        const m=incoming.find(i=>i.id===ex.id); return m?{...ex,...m}:ex;
+      });
+      state.deals=[...fresh,...updated,...manual];
+      trySave();
+      const now=new Date().toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
+      state.lastSync=now; localStorage.setItem("yk_last_sync",now);
+      state.syncMsg=`Synced ${incoming.length} deal${incoming.length!==1?"s":""}`;
+      state.syncOk=true;
+    }
+  } catch(e) { state.syncMsg="Sync failed: "+e.message; state.syncOk=false; }
+  state.syncing=false; render();
+  setTimeout(()=>{ state.syncMsg=""; render(); }, 4000);
+}
+
+function render() {
+  const { deals, filter, search, modal, form, syncing, syncMsg, syncOk, lastSync, confirmDelete } = state;
+  const filtered = deals.filter(d => {
+    const mf = filter==="All"||d.status===filter;
+    const ms = !search||d.brand.toLowerCase().includes(search.toLowerCase())||d.contact.toLowerCase().includes(search.toLowerCase());
+    return mf&&ms;
+  });
+  const counts = STATUSES.reduce((a,s)=>{ a[s]=deals.filter(d=>d.status===s).length; return a; },{});
+
+  document.getElementById("app").innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:28px;">
+      <div>
+        <div style="font-size:11px;letter-spacing:3px;color:#C9A84C;text-transform:uppercase;margin-bottom:6px;">@yasmeenikole</div>
+        <div style="font-family:'Playfair Display',serif;font-size:32px;font-weight:700;line-height:1.1;">Brand Deals</div>
+        ${lastSync?`<div style="font-size:11px;color:#555;margin-top:5px;">Last synced: ${lastSync}</div>`:""}
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+        ${syncMsg?`<span class="${syncOk?"sync-ok":"sync-err"}">${syncMsg}</span>`:""}
+        <button onclick="doSync()" ${syncing?"disabled":""} style="color:#22C07A;border-color:#22C07A55;">
+          <span class="${syncing?"spin":""}">↻</span> ${syncing?"Syncing…":"Sync Sheet"}
+        </button>
+        <button onclick="exportPDF()" style="color:#C9A84C;border-color:#C9A84C55;">↓ Export PDF</button>
+        <button onclick="openNew()" style="background:#C9A84C;color:#0D0D0F;border-color:#C9A84C;font-weight:600;">+ New Deal</button>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px;">
+      ${STATUSES.map(s=>`
+        <div class="stat">
+          <div style="font-size:22px;font-weight:600;color:${SC[s].dot}">${counts[s]||0}</div>
+          <div style="font-size:11px;color:#888;margin-top:2px;">${s}</div>
+        </div>`).join("")}
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:20px;">
+      ${["All",...STATUSES].map(f=>`<button class="pill ${filter===f?"active":""}" onclick="setFilter('${f}')">${f}</button>`).join("")}
+      <input placeholder="Search brand or contact…" value="${esc(search)}" oninput="setSearch(this.value)" style="margin-left:auto;width:200px;"/>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      ${filtered.length===0
+        ?`<div style="text-align:center;color:#555;padding:60px 0;font-size:15px;">${deals.length===0?"No deals yet — click Sync Sheet or add one manually.":"No deals match your filter."}</div>`
+        :filtered.map(d=>{
+          const sc=SC[d.status]||SC["Open Offer"];
+          const fromSheet=String(d.id).startsWith("sheet_");
+          return `<div class="card" onclick="openEdit('${d.id}')">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+              <span style="font-size:16px;font-weight:600;">${esc(d.brand)||"Unnamed Brand"}</span>
+              <span class="badge" style="background:${sc.bg};color:${sc.text};">
+                <span style="width:6px;height:6px;border-radius:50%;background:${sc.dot};display:inline-block;flex-shrink:0;"></span>
+                ${d.status}
+              </span>
+              ${fromSheet?`<span class="tag-gmail">from Gmail</span>`:""}
+            </div>
+            <div style="display:flex;gap:20px;flex-wrap:wrap;">
+              ${d.contact?`<span style="font-size:13px;color:#888;">👤 ${esc(d.contact)}</span>`:""}
+              ${d.value?`<span style="font-size:13px;font-weight:600;color:#C9A84C;">${fmt(d.value)}</span>`:""}
+              ${d.deadline?`<span style="font-size:13px;color:#888;">📅 ${esc(d.deadline)}</span>`:""}
+              ${d.deliverables?`<span style="font-size:13px;color:#666;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📋 ${esc(d.deliverables)}</span>`:""}
+            </div>
+          </div>`;
+        }).join("")}
+    </div>
+
+    ${modal?`
+    <div class="overlay" onclick="closeModal()">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;">
+          <div style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;">${modal==="new"?"New Deal":"Edit Deal"}</div>
+          <button onclick="closeModal()" style="font-size:20px;padding:0 8px;border:none;color:#888;">✕</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:14px;">
+          <div><label class="lbl">Brand name *</label><input value="${esc(form.brand)}" oninput="sf('brand',this.value)" placeholder="e.g. Glossier"/></div>
+          <div class="grid2">
+            <div><label class="lbl">Contact name</label><input value="${esc(form.contact)}" oninput="sf('contact',this.value)" placeholder="e.g. Sarah K."/></div>
+            <div><label class="lbl">Email</label><input value="${esc(form.email)}" oninput="sf('email',this.value)" placeholder="sarah@brand.com"/></div>
+          </div>
+          <div class="grid2">
+            <div><label class="lbl">Deal value</label><input value="${esc(form.value)}" oninput="sf('value',this.value)" placeholder="e.g. $2,500"/></div>
+            <div><label class="lbl">Deadline</label><input type="date" value="${esc(form.deadline)}" oninput="sf('deadline',this.value)"/></div>
+          </div>
+          <div><label class="lbl">Deliverables</label><textarea oninput="sf('deliverables',this.value)" placeholder="e.g. 1 TikTok, 3 stories">${esc(form.deliverables)}</textarea></div>
+          <div><label class="lbl">Status</label>
+            <select onchange="sf('status',this.value)">
+              ${STATUSES.map(s=>`<option value="${s}" ${form.status===s?"selected":""}>${s}</option>`).join("")}
+            </select>
+          </div>
+          <div><label class="lbl">Notes</label><textarea oninput="sf('notes',this.value)" placeholder="Any extra details…">${esc(form.notes)}</textarea></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;">
+          <div>
+            ${modal!=="new"?(confirmDelete
+              ?`<span style="font-size:12px;color:#888;margin-right:8px;">Sure?</span>
+                <button onclick="doDelete()" style="font-size:12px;color:#E84040;border-color:#E84040;">Yes, delete</button>
+                <button onclick="state.confirmDelete=false;render()" style="font-size:12px;margin-left:6px;">Cancel</button>`
+              :`<button onclick="state.confirmDelete=true;render()" style="font-size:12px;color:#E84040;border-color:#E8404033;">Delete</button>`)
+            :""}
+          </div>
+          <div style="display:flex;gap:10px;">
+            <button onclick="closeModal()" style="font-size:13px;">Cancel</button>
+            <button onclick="saveDeal()" style="background:#C9A84C;color:#0D0D0F;border-color:#C9A84C;font-weight:600;font-size:13px;">${modal==="new"?"Add Deal":"Save Changes"}</button>
+          </div>
+        </div>
+      </div>
+    </div>`:""}
+  `;
+}
+
+function setFilter(f){state.filter=f;render();}
+function setSearch(v){state.search=v;render();}
+function sf(k,v){state.form[k]=v;}
+function openNew(){state.form=emptyDeal();state.modal="new";state.confirmDelete=false;render();}
+function openEdit(id){const d=state.deals.find(x=>String(x.id)===String(id));if(d){state.form={...d};state.modal=d;state.confirmDelete=false;render();}}
+function closeModal(){state.modal=null;state.confirmDelete=false;render();}
+function doDelete(){state.deals=state.deals.filter(d=>String(d.id)!==String(state.form.id));trySave();closeModal();}
+function saveDeal(){
+  if(!state.form.brand.trim())return;
+  if(state.modal==="new"){state.deals=[{...state.form,id:Date.now()},...state.deals];}
+  else{state.deals=state.deals.map(d=>String(d.id)===String(state.form.id)?{...state.form}:d);}
+  trySave();closeModal();
+}
+function exportPDF(){
+  const win=window.open("","_blank");
+  const rows=state.deals.map(d=>`<tr><td>${d.brand||"—"}</td><td>${d.contact||"—"}</td><td>${d.value?fmt(d.value):"—"}</td><td>${d.deadline||"—"}</td><td>${d.deliverables||"—"}</td><td>${d.status}</td><td>${d.notes||"—"}</td></tr>`).join("");
+  win.document.write(`<!DOCTYPE html><html><head><title>Brand Deals</title><style>body{font-family:Georgia,serif;padding:40px;color:#1a1a1a}h1{margin-bottom:4px}.sub{color:#888;font-size:13px;margin-bottom:24px}table{width:100%;border-collapse:collapse;font-size:13px}th{background:#1a1a1a;color:#fff;padding:9px 12px;text-align:left}td{padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top}tr:nth-child(even)td{background:#fafafa}</style></head><body><h1>Brand Deals</h1><div class="sub">@yasmeenikole · Exported ${new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}</div><table><thead><tr><th>Brand</th><th>Contact</th><th>Value</th><th>Deadline</th><th>Deliverables</th><th>Status</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table><script>window.onload=()=>window.print()<\/script></body></html>`);
+  win.document.close();
+}
+
+render();
+</script>
+</body>
+</html>
