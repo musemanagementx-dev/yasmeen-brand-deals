@@ -30,21 +30,22 @@ label.lbl { font-size: 11px; color: #888; display: block; margin-bottom: 5px; te
 .sync-err { background: #2a0a0a; color: #E84040; border: 1px solid #4a1a1a; border-radius: 8px; padding: 5px 12px; font-size: 12px; }
 .tag-gmail { font-size: 10px; color: #555; border: 1px solid #2a2a30; border-radius: 4px; padding: 1px 5px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { display: inline-block; animation: spin 0.8s linear infinite; }
 .tab { padding: 8px 18px; border-radius: 10px; font-size: 13px; cursor: pointer; border: none; background: transparent; color: #888; transition: all 0.15s; }
 .tab.active { background: #1e1e24; color: #F0EEE8; }
-.priority-high   { color: #E84040; }
-.priority-medium { color: #F5A623; }
-.priority-low    { color: #22C07A; }
 .tag-chip { display: inline-block; background: #1e1e28; border: 1px solid #2a2a38; border-radius: 20px; padding: 2px 10px; font-size: 11px; color: #aaa; margin: 2px; }
 .dash-card { background: #17171C; border: 1px solid #222; border-radius: 14px; padding: 20px; }
 .followup-soon { color: #F5A623; font-size: 11px; }
 .followup-overdue { color: #E84040; font-size: 11px; }
 .email-box { background: #0D0D0F; border: 1px solid #2a2a30; border-radius: 12px; padding: 16px; font-size: 13px; line-height: 1.7; color: #ccc; white-space: pre-wrap; min-height: 200px; }
 .copy-btn { background: #C9A84C; color: #0D0D0F; border-color: #C9A84C; font-weight: 600; }
-.copy-btn:hover { background: #e8c87a !important; }
+.copy-btn:hover:not(:disabled) { background: #e8c87a !important; }
+.filter-bar { background: #17171C; border: 1px solid #222; border-radius: 14px; padding: 14px 18px; margin-bottom: 16px; display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.filter-group { display: flex; flex-direction: column; gap: 5px; }
+.filter-group label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+.filter-group select { background: #0D0D0F; border: 1px solid #2a2a30; border-radius: 8px; padding: 6px 10px; color: #F0EEE8; font-size: 12px; width: auto; min-width: 130px; }
+.active-filter { background: #C9A84C22; border-color: #C9A84C55 !important; color: #C9A84C; }
 </style>
 </head>
 <body>
@@ -66,38 +67,38 @@ const SC = {
 
 let state = {
   deals: tryLoad(),
-  view: "deals", // deals | dashboard
-  filter: "All", search: "",
+  view: "deals",
+  filter: "All",
+  categoryFilter: "",
+  followUpFilter: "",
+  sortBy: "",
+  search: "",
   modal: null, form: emptyDeal(),
   syncing: false, syncMsg: "", syncOk: true,
   lastSync: localStorage.getItem("yk_last_sync") || "",
   confirmDelete: false,
-  emailModal: null, // deal object
+  emailModal: null,
   emailLoading: false,
   emailText: "",
   emailTone: "professional",
   copiedEmail: false,
 };
 
-function tryLoad() { try { return JSON.parse(localStorage.getItem("yk_deals_v2")||"[]"); } catch { return []; } }
-function trySave() { try { localStorage.setItem("yk_deals_v2", JSON.stringify(state.deals)); } catch {} }
-
+function tryLoad() { try { return JSON.parse(localStorage.getItem("yk_deals_v3")||"[]"); } catch { return []; } }
+function trySave() { try { localStorage.setItem("yk_deals_v3", JSON.stringify(state.deals)); } catch {} }
 function emptyDeal() {
-  return {
-    id: Date.now(), brand:"", contact:"", email:"", value:"",
-    deliverables:"", deadline:"", status:"Open Offer", notes:"",
-    priority:"Medium", category:"", followUpDate:"", tags:"",
-  };
+  return { id: Date.now(), brand:"", contact:"", email:"", value:"", deliverables:"", deadline:"", status:"Open Offer", notes:"", priority:"Medium", category:"", followUpDate:"", tags:"" };
 }
-
 function fmt(v) { const n=parseFloat(String(v||"").replace(/[^0-9.]/g,"")); return isNaN(n)?v:"$"+n.toLocaleString(); }
+function fmtNum(v) { const n=parseFloat(String(v||"").replace(/[^0-9.]/g,"")); return isNaN(n)?0:n; }
 function esc(s) { return String(s||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
 
 function followUpStatus(dateStr) {
   if (!dateStr) return "";
-  const d = new Date(dateStr); const now = new Date();
+  const d = new Date(dateStr); const now = new Date(); now.setHours(0,0,0,0);
   const diff = Math.ceil((d - now) / 86400000);
-  if (diff < 0) return `<span class="followup-overdue">⚠ Follow-up overdue</span>`;
+  if (diff < 0) return `<span class="followup-overdue">⚠ Follow-up overdue (${Math.abs(diff)}d ago)</span>`;
+  if (diff === 0) return `<span class="followup-overdue">⚠ Follow up today</span>`;
   if (diff <= 3) return `<span class="followup-soon">⏰ Follow up in ${diff}d</span>`;
   return `<span style="font-size:11px;color:#555;">Follow up: ${dateStr}</span>`;
 }
@@ -134,13 +135,29 @@ async function doSync() {
     else {
       const manual = state.deals.filter(d=>!String(d.id).startsWith("sheet_"));
       const manualBrands = new Set(manual.map(d=>d.brand.toLowerCase()));
-      const existIds = new Set(state.deals.filter(d=>String(d.id).startsWith("sheet_")).map(d=>d.id));
+      const existingSheet = state.deals.filter(d=>String(d.id).startsWith("sheet_"));
+      const existIds = new Set(existingSheet.map(d=>d.id));
+
       const fresh = incoming.filter(d=>!manualBrands.has(d.brand.toLowerCase())&&!existIds.has(d.id));
-      const updated = state.deals.filter(d=>String(d.id).startsWith("sheet_")).map(ex=>{
-        const m=incoming.find(i=>i.id===ex.id);
-        return m?{...m, priority:ex.priority, category:ex.category, followUpDate:ex.followUpDate, tags:ex.tags, notes:ex.notes||m.notes}:ex;
+
+      // KEY FIX: when updating existing sheet deals, NEVER overwrite status, priority,
+      // category, followUpDate, tags, or notes that the user has manually set
+      const updated = existingSheet.map(ex => {
+        const m = incoming.find(i=>i.id===ex.id);
+        if (!m) return ex;
+        return {
+          ...m,
+          // Preserve everything the user has touched
+          status: ex.status,
+          priority: ex.priority,
+          category: ex.category,
+          followUpDate: ex.followUpDate,
+          tags: ex.tags,
+          notes: ex.notes || m.notes,
+        };
       });
-      state.deals=[...fresh,...updated,...manual];
+
+      state.deals = [...fresh, ...updated, ...manual];
       trySave();
       const now=new Date().toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
       state.lastSync=now; localStorage.setItem("yk_last_sync",now);
@@ -162,27 +179,12 @@ async function generateEmail() {
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
         max_tokens: 1000,
-        messages:[{
-          role:"user",
-          content:`You are a social media manager for @yasmeenikole, a TikTok creator. Write a ${state.emailTone} email reply to a brand deal offer with these details:
-
-Brand: ${d.brand}
-Contact: ${d.contact||"the brand team"}
-Deal Value: ${d.value||"not specified"}
-Deliverables: ${d.deliverables||"not specified"}
-Deadline: ${d.deadline||"not specified"}
-Status: ${d.status}
-Notes: ${d.notes||"none"}
-
-Write a reply email that is warm, confident, and professional. If status is "Open Offer" or "Negotiating", express interest and ask any clarifying questions needed. If "Declined", politely decline. Keep it concise — under 150 words. Output ONLY the email body text, no subject line, no quotes around it.`
-        }]
+        messages:[{ role:"user", content:`You are a social media manager for @yasmeenikole, a TikTok creator. Write a ${state.emailTone} email reply to a brand deal offer with these details:\n\nBrand: ${d.brand}\nContact: ${d.contact||"the brand team"}\nDeal Value: ${d.value||"not specified"}\nDeliverables: ${d.deliverables||"not specified"}\nDeadline: ${d.deadline||"not specified"}\nStatus: ${d.status}\nNotes: ${d.notes||"none"}\n\nWrite a reply email that is warm, confident, and professional. If status is "Open Offer" or "Negotiating", express interest and ask any clarifying questions needed. If "Declined", politely decline. Keep it concise — under 150 words. Output ONLY the email body text, no subject line, no quotes around it.` }]
       })
     });
     const data = await res.json();
     state.emailText = data.content?.[0]?.text || "Could not generate email.";
-  } catch(e) {
-    state.emailText = "Error generating email: "+e.message;
-  }
+  } catch(e) { state.emailText = "Error: "+e.message; }
   state.emailLoading=false; render();
 }
 
@@ -195,141 +197,75 @@ function copyEmail() {
 
 function exportPDF() {
   const win=window.open("","_blank");
-  const rows=state.deals.map(d=>`<tr>
-    <td>${esc(d.brand)||"—"}</td>
-    <td>${esc(d.contact)||"—"}</td>
-    <td>${d.value?fmt(d.value):"—"}</td>
-    <td>${esc(d.deadline)||"—"}</td>
-    <td>${esc(d.deliverables)||"—"}</td>
-    <td>${d.status}</td>
-    <td>${d.priority||"—"}</td>
-    <td>${d.category||"—"}</td>
-    <td>${esc(d.notes)||"—"}</td>
-  </tr>`).join("");
-  win.document.write(`<!DOCTYPE html><html><head><title>Brand Deals</title><style>
-    body{font-family:Georgia,serif;padding:40px;color:#1a1a1a}h1{margin-bottom:4px}
-    .sub{color:#888;font-size:13px;margin-bottom:24px}
-    table{width:100%;border-collapse:collapse;font-size:12px}
-    th{background:#1a1a1a;color:#fff;padding:8px 10px;text-align:left}
-    td{padding:8px 10px;border-bottom:1px solid #eee;vertical-align:top}
-    tr:nth-child(even)td{background:#fafafa}
-  </style></head><body>
-  <h1>Brand Deals</h1>
-  <div class="sub">@yasmeenikole · Exported ${new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}</div>
-  <table><thead><tr><th>Brand</th><th>Contact</th><th>Value</th><th>Deadline</th><th>Deliverables</th><th>Status</th><th>Priority</th><th>Category</th><th>Notes</th></tr></thead>
-  <tbody>${rows}</tbody></table>
-  <script>window.onload=()=>window.print()<\/script></body></html>`);
+  const rows=state.deals.map(d=>`<tr><td>${esc(d.brand)||"—"}</td><td>${esc(d.contact)||"—"}</td><td>${d.value?fmt(d.value):"—"}</td><td>${esc(d.deadline)||"—"}</td><td>${esc(d.deliverables)||"—"}</td><td>${d.status}</td><td>${d.priority||"—"}</td><td>${d.category||"—"}</td><td>${esc(d.notes)||"—"}</td></tr>`).join("");
+  win.document.write(`<!DOCTYPE html><html><head><title>Brand Deals</title><style>body{font-family:Georgia,serif;padding:40px;color:#1a1a1a}h1{margin-bottom:4px}.sub{color:#888;font-size:13px;margin-bottom:24px}table{width:100%;border-collapse:collapse;font-size:12px}th{background:#1a1a1a;color:#fff;padding:8px 10px;text-align:left}td{padding:8px 10px;border-bottom:1px solid #eee;vertical-align:top}tr:nth-child(even)td{background:#fafafa}</style></head><body><h1>Brand Deals</h1><div class="sub">@yasmeenikole · Exported ${new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}</div><table><thead><tr><th>Brand</th><th>Contact</th><th>Value</th><th>Deadline</th><th>Deliverables</th><th>Status</th><th>Priority</th><th>Category</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table><script>window.onload=()=>window.print()<\/script></body></html>`);
   win.document.close();
 }
 
 function renderDashboard() {
   const deals = state.deals;
-  const totalValue = deals.filter(d=>d.value).reduce((a,d)=>a+parseFloat(String(d.value).replace(/[^0-9.]/g,"")||0),0);
-  const activeValue = deals.filter(d=>d.status==="Active"&&d.value).reduce((a,d)=>a+parseFloat(String(d.value).replace(/[^0-9.]/g,"")||0),0);
-  const completedValue = deals.filter(d=>d.status==="Completed"&&d.value).reduce((a,d)=>a+parseFloat(String(d.value).replace(/[^0-9.]/g,"")||0),0);
+  const totalValue = deals.reduce((a,d)=>a+fmtNum(d.value),0);
+  const activeValue = deals.filter(d=>d.status==="Active").reduce((a,d)=>a+fmtNum(d.value),0);
+  const completedValue = deals.filter(d=>d.status==="Completed").reduce((a,d)=>a+fmtNum(d.value),0);
   const openCount = deals.filter(d=>d.status==="Open Offer"||d.status==="Negotiating").length;
   const catCounts = {};
   deals.forEach(d=>{ if(d.category){ catCounts[d.category]=(catCounts[d.category]||0)+1; }});
   const topCats = Object.entries(catCounts).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const upcoming = deals.filter(d=>d.followUpDate&&new Date(d.followUpDate)>=new Date()).sort((a,b)=>new Date(a.followUpDate)-new Date(b.followUpDate)).slice(0,5);
-  const overdue = deals.filter(d=>d.followUpDate&&new Date(d.followUpDate)<new Date());
-
+  const now = new Date(); now.setHours(0,0,0,0);
+  const upcoming = deals.filter(d=>d.followUpDate&&new Date(d.followUpDate)>=now).sort((a,b)=>new Date(a.followUpDate)-new Date(b.followUpDate)).slice(0,5);
+  const overdue = deals.filter(d=>d.followUpDate&&new Date(d.followUpDate)<now);
   return `
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:28px;">
-      <div class="dash-card">
-        <div style="font-size:11px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Total Pipeline</div>
-        <div style="font-size:26px;font-weight:600;color:#C9A84C;">$${totalValue.toLocaleString()}</div>
-        <div style="font-size:11px;color:#555;margin-top:4px;">${deals.length} deals total</div>
-      </div>
-      <div class="dash-card">
-        <div style="font-size:11px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Active</div>
-        <div style="font-size:26px;font-weight:600;color:#22C07A;">$${activeValue.toLocaleString()}</div>
-        <div style="font-size:11px;color:#555;margin-top:4px;">${deals.filter(d=>d.status==="Active").length} deals</div>
-      </div>
-      <div class="dash-card">
-        <div style="font-size:11px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Completed</div>
-        <div style="font-size:26px;font-weight:600;color:#5272E8;">$${completedValue.toLocaleString()}</div>
-        <div style="font-size:11px;color:#555;margin-top:4px;">${deals.filter(d=>d.status==="Completed").length} deals</div>
-      </div>
-      <div class="dash-card">
-        <div style="font-size:11px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Open Offers</div>
-        <div style="font-size:26px;font-weight:600;color:#F5A623;">${openCount}</div>
-        <div style="font-size:11px;color:#555;margin-top:4px;">need response</div>
-      </div>
-      ${overdue.length>0?`
-      <div class="dash-card" style="border-color:#E8404044;">
-        <div style="font-size:11px;color:#E84040;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Overdue Follow-ups</div>
-        <div style="font-size:26px;font-weight:600;color:#E84040;">${overdue.length}</div>
-        <div style="font-size:11px;color:#555;margin-top:4px;">need attention</div>
-      </div>`:""}
+      <div class="dash-card"><div style="font-size:11px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Total Pipeline</div><div style="font-size:26px;font-weight:600;color:#C9A84C;">$${totalValue.toLocaleString()}</div><div style="font-size:11px;color:#555;margin-top:4px;">${deals.length} deals</div></div>
+      <div class="dash-card"><div style="font-size:11px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Active</div><div style="font-size:26px;font-weight:600;color:#22C07A;">$${activeValue.toLocaleString()}</div><div style="font-size:11px;color:#555;margin-top:4px;">${deals.filter(d=>d.status==="Active").length} deals</div></div>
+      <div class="dash-card"><div style="font-size:11px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Completed</div><div style="font-size:26px;font-weight:600;color:#5272E8;">$${completedValue.toLocaleString()}</div><div style="font-size:11px;color:#555;margin-top:4px;">${deals.filter(d=>d.status==="Completed").length} deals</div></div>
+      <div class="dash-card"><div style="font-size:11px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Open Offers</div><div style="font-size:26px;font-weight:600;color:#F5A623;">${openCount}</div><div style="font-size:11px;color:#555;margin-top:4px;">need response</div></div>
+      ${overdue.length>0?`<div class="dash-card" style="border-color:#E8404044;"><div style="font-size:11px;color:#E84040;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">Overdue Follow-ups</div><div style="font-size:26px;font-weight:600;color:#E84040;">${overdue.length}</div><div style="font-size:11px;color:#555;margin-top:4px;">need attention</div></div>`:""}
     </div>
-
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
       <div class="dash-card">
         <div style="font-size:13px;font-weight:600;margin-bottom:14px;">Status breakdown</div>
-        ${STATUSES.map(s=>{
-          const count = deals.filter(d=>d.status===s).length;
-          const pct = deals.length ? Math.round(count/deals.length*100) : 0;
-          return `<div style="margin-bottom:10px;">
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-              <span style="font-size:12px;color:#aaa;">${s}</span>
-              <span style="font-size:12px;color:#666;">${count}</span>
-            </div>
-            <div style="background:#222;border-radius:4px;height:4px;">
-              <div style="background:${SC[s].dot};border-radius:4px;height:4px;width:${pct}%;transition:width 0.3s;"></div>
-            </div>
-          </div>`;
-        }).join("")}
+        ${STATUSES.map(s=>{ const count=deals.filter(d=>d.status===s).length; const pct=deals.length?Math.round(count/deals.length*100):0; return `<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span style="font-size:12px;color:#aaa;">${s}</span><span style="font-size:12px;color:#666;">${count}</span></div><div style="background:#222;border-radius:4px;height:4px;"><div style="background:${SC[s].dot};border-radius:4px;height:4px;width:${pct}%;"></div></div></div>`; }).join("")}
       </div>
-
       <div class="dash-card">
         <div style="font-size:13px;font-weight:600;margin-bottom:14px;">Upcoming follow-ups</div>
-        ${upcoming.length===0
-          ?`<div style="color:#555;font-size:13px;">No upcoming follow-ups</div>`
-          :upcoming.map(d=>`
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #222;">
-              <div>
-                <div style="font-size:13px;font-weight:500;">${esc(d.brand)}</div>
-                <div style="font-size:11px;color:#888;">${d.followUpDate}</div>
-              </div>
-              <span class="badge" style="background:${SC[d.status]?.bg};color:${SC[d.status]?.text};">${d.status}</span>
-            </div>`).join("")}
+        ${upcoming.length===0?`<div style="color:#555;font-size:13px;">No upcoming follow-ups set</div>`:upcoming.map(d=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #222;"><div><div style="font-size:13px;font-weight:500;">${esc(d.brand)}</div><div style="font-size:11px;color:#888;">${d.followUpDate}</div></div><span class="badge" style="background:${SC[d.status]?.bg};color:${SC[d.status]?.text};">${d.status}</span></div>`).join("")}
       </div>
+      ${topCats.length>0?`<div class="dash-card"><div style="font-size:13px;font-weight:600;margin-bottom:14px;">Top categories</div>${topCats.map(([cat,count])=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #222;"><span style="font-size:13px;color:#aaa;">${cat}</span><span style="font-size:13px;font-weight:500;">${count} deal${count!==1?"s":""}</span></div>`).join("")}</div>`:""}
+      <div class="dash-card"><div style="font-size:13px;font-weight:600;margin-bottom:14px;">Priority breakdown</div>${PRIORITIES.map(p=>{ const count=deals.filter(d=>d.priority===p).length; const colors={"High":"#E84040","Medium":"#F5A623","Low":"#22C07A"}; return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #222;"><span style="font-size:13px;color:${colors[p]};">● ${p}</span><span style="font-size:13px;">${count} deal${count!==1?"s":""}</span></div>`; }).join("")}</div>
+    </div>`;
+}
 
-      ${topCats.length>0?`
-      <div class="dash-card">
-        <div style="font-size:13px;font-weight:600;margin-bottom:14px;">Top categories</div>
-        ${topCats.map(([cat,count])=>`
-          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #222;">
-            <span style="font-size:13px;color:#aaa;">${cat}</span>
-            <span style="font-size:13px;font-weight:500;">${count} deal${count!==1?"s":""}</span>
-          </div>`).join("")}
-      </div>`:""}
-
-      <div class="dash-card">
-        <div style="font-size:13px;font-weight:600;margin-bottom:14px;">Priority breakdown</div>
-        ${PRIORITIES.map(p=>{
-          const count=deals.filter(d=>d.priority===p).length;
-          const colors={"High":"#E84040","Medium":"#F5A623","Low":"#22C07A"};
-          return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #222;">
-            <span style="font-size:13px;color:${colors[p]};">● ${p}</span>
-            <span style="font-size:13px;">${count} deal${count!==1?"s":""}</span>
-          </div>`;
-        }).join("")}
-      </div>
-    </div>
-  `;
+function getFiltered() {
+  const { deals, filter, categoryFilter, followUpFilter, sortBy, search } = state;
+  const now = new Date(); now.setHours(0,0,0,0);
+  let list = deals.filter(d => {
+    if (filter !== "All" && d.status !== filter) return false;
+    if (categoryFilter && d.category !== categoryFilter) return false;
+    if (followUpFilter === "overdue" && !(d.followUpDate && new Date(d.followUpDate) < now)) return false;
+    if (followUpFilter === "this_week") {
+      if (!d.followUpDate) return false;
+      const fd = new Date(d.followUpDate);
+      const diff = Math.ceil((fd - now) / 86400000);
+      if (diff < 0 || diff > 7) return false;
+    }
+    if (search && !d.brand.toLowerCase().includes(search.toLowerCase()) && !d.contact.toLowerCase().includes(search.toLowerCase()) && !(d.category||"").toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+  if (sortBy === "value_desc") list.sort((a,b)=>fmtNum(b.value)-fmtNum(a.value));
+  if (sortBy === "value_asc")  list.sort((a,b)=>fmtNum(a.value)-fmtNum(b.value));
+  if (sortBy === "deadline_asc")  list.sort((a,b)=>{ if(!a.deadline) return 1; if(!b.deadline) return -1; return new Date(a.deadline)-new Date(b.deadline); });
+  if (sortBy === "deadline_desc") list.sort((a,b)=>{ if(!a.deadline) return 1; if(!b.deadline) return -1; return new Date(b.deadline)-new Date(a.deadline); });
+  if (sortBy === "followup_asc")  list.sort((a,b)=>{ if(!a.followUpDate) return 1; if(!b.followUpDate) return -1; return new Date(a.followUpDate)-new Date(b.followUpDate); });
+  return list;
 }
 
 function render() {
-  const { deals, view, filter, search, modal, form, syncing, syncMsg, syncOk, lastSync, confirmDelete, emailModal, emailLoading, emailText, emailTone, copiedEmail } = state;
-
-  const filtered = deals.filter(d => {
-    const mf = filter==="All"||d.status===filter;
-    const ms = !search||d.brand.toLowerCase().includes(search.toLowerCase())||d.contact.toLowerCase().includes(search.toLowerCase())||(d.category||"").toLowerCase().includes(search.toLowerCase());
-    return mf&&ms;
-  });
+  const { deals, view, filter, categoryFilter, followUpFilter, sortBy, search, modal, form, syncing, syncMsg, syncOk, lastSync, confirmDelete, emailModal, emailLoading, emailText, emailTone, copiedEmail } = state;
+  const filtered = getFiltered();
   const counts = STATUSES.reduce((a,s)=>{ a[s]=deals.filter(d=>d.status===s).length; return a; },{});
+  const usedCategories = [...new Set(deals.map(d=>d.category).filter(Boolean))].sort();
+  const hasActiveFilters = categoryFilter || followUpFilter || sortBy;
 
   document.getElementById("app").innerHTML = `
     <!-- Header -->
@@ -341,9 +277,7 @@ function render() {
       </div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px;">
         ${syncMsg?`<span class="${syncOk?"sync-ok":"sync-err"}">${syncMsg}</span>`:""}
-        <button onclick="doSync()" ${syncing?"disabled":""} style="color:#22C07A;border-color:#22C07A55;">
-          <span class="${syncing?"spin":""}">↻</span> ${syncing?"Syncing…":"Sync Sheet"}
-        </button>
+        <button onclick="doSync()" ${syncing?"disabled":""} style="color:#22C07A;border-color:#22C07A55;"><span class="${syncing?"spin":""}">↻</span> ${syncing?"Syncing…":"Sync Sheet"}</button>
         <button onclick="exportPDF()" style="color:#C9A84C;border-color:#C9A84C55;">↓ PDF</button>
         <button onclick="openNew()" style="background:#C9A84C;color:#0D0D0F;border-color:#C9A84C;font-weight:600;">+ New Deal</button>
       </div>
@@ -356,25 +290,54 @@ function render() {
     </div>
 
     ${view==="dashboard" ? renderDashboard() : `
-    <!-- Stats -->
+    <!-- Stats row -->
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px;">
-      ${STATUSES.map(s=>`
-        <div class="stat">
-          <div style="font-size:22px;font-weight:600;color:${SC[s].dot}">${counts[s]||0}</div>
-          <div style="font-size:11px;color:#888;margin-top:2px;">${s}</div>
-        </div>`).join("")}
+      ${STATUSES.map(s=>`<div class="stat"><div style="font-size:22px;font-weight:600;color:${SC[s].dot}">${counts[s]||0}</div><div style="font-size:11px;color:#888;margin-top:2px;">${s}</div></div>`).join("")}
     </div>
 
-    <!-- Filters -->
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:20px;">
+    <!-- Status filter pills -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
       ${["All",...STATUSES].map(f=>`<button class="pill ${filter===f?"active":""}" onclick="setFilter('${f}')">${f}</button>`).join("")}
       <input placeholder="Search brand, contact, category…" value="${esc(search)}" oninput="setSearch(this.value)" style="margin-left:auto;width:220px;"/>
+    </div>
+
+    <!-- Advanced filter bar -->
+    <div class="filter-bar">
+      <div class="filter-group">
+        <label>Category</label>
+        <select onchange="state.categoryFilter=this.value;render()" class="${categoryFilter?"active-filter":""}">
+          <option value="">All categories</option>
+          ${usedCategories.map(c=>`<option value="${c}" ${categoryFilter===c?"selected":""}>${c}</option>`).join("")}
+          ${CATEGORIES.filter(c=>!usedCategories.includes(c)).map(c=>`<option value="${c}" ${categoryFilter===c?"selected":""}>${c}</option>`).join("")}
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Follow-up</label>
+        <select onchange="state.followUpFilter=this.value;render()" class="${followUpFilter?"active-filter":""}">
+          <option value="">All</option>
+          <option value="overdue" ${followUpFilter==="overdue"?"selected":""}>⚠ Overdue</option>
+          <option value="this_week" ${followUpFilter==="this_week"?"selected":""}>⏰ This week</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Sort by</label>
+        <select onchange="state.sortBy=this.value;render()" class="${sortBy?"active-filter":""}">
+          <option value="">Default</option>
+          <option value="value_desc" ${sortBy==="value_desc"?"selected":""}>Value: highest first</option>
+          <option value="value_asc"  ${sortBy==="value_asc"?"selected":""}>Value: lowest first</option>
+          <option value="deadline_asc"  ${sortBy==="deadline_asc"?"selected":""}>Deadline: soonest first</option>
+          <option value="deadline_desc" ${sortBy==="deadline_desc"?"selected":""}>Deadline: latest first</option>
+          <option value="followup_asc"  ${sortBy==="followup_asc"?"selected":""}>Follow-up: soonest first</option>
+        </select>
+      </div>
+      ${hasActiveFilters?`<button onclick="state.categoryFilter='';state.followUpFilter='';state.sortBy='';render()" style="font-size:12px;padding:6px 12px;color:#E84040;border-color:#E8404033;margin-top:14px;">✕ Clear filters</button>`:""}
+      <div style="margin-left:auto;margin-top:14px;font-size:12px;color:#555;">${filtered.length} deal${filtered.length!==1?"s":""} shown</div>
     </div>
 
     <!-- Deal cards -->
     <div style="display:flex;flex-direction:column;gap:12px;">
       ${filtered.length===0
-        ?`<div style="text-align:center;color:#555;padding:60px 0;font-size:15px;">${deals.length===0?"No deals yet — click Sync Sheet or add one manually.":"No deals match your filter."}</div>`
+        ?`<div style="text-align:center;color:#555;padding:60px 0;font-size:15px;">${deals.length===0?"No deals yet — click Sync Sheet or add one manually.":"No deals match your filters."}</div>`
         :filtered.map(d=>{
           const sc=SC[d.status]||SC["Open Offer"];
           const fromSheet=String(d.id).startsWith("sheet_");
@@ -382,10 +345,7 @@ function render() {
           return `<div class="card" onclick="openEdit('${d.id}')">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
               <span style="font-size:16px;font-weight:600;">${esc(d.brand)||"Unnamed Brand"}</span>
-              <span class="badge" style="background:${sc.bg};color:${sc.text};">
-                <span style="width:6px;height:6px;border-radius:50%;background:${sc.dot};display:inline-block;flex-shrink:0;"></span>
-                ${d.status}
-              </span>
+              <span class="badge" style="background:${sc.bg};color:${sc.text};"><span style="width:6px;height:6px;border-radius:50%;background:${sc.dot};display:inline-block;flex-shrink:0;"></span>${d.status}</span>
               ${d.priority?`<span style="font-size:11px;color:${pColors[d.priority]||"#888"};">● ${d.priority}</span>`:""}
               ${d.category?`<span class="tag-chip">${esc(d.category)}</span>`:""}
               ${fromSheet?`<span class="tag-gmail">from Gmail</span>`:""}
@@ -423,9 +383,7 @@ function render() {
           </div>
           <div class="grid2">
             <div><label class="lbl">Priority</label>
-              <select onchange="sf('priority',this.value)">
-                ${PRIORITIES.map(p=>`<option value="${p}" ${form.priority===p?"selected":""}>${p}</option>`).join("")}
-              </select>
+              <select onchange="sf('priority',this.value)">${PRIORITIES.map(p=>`<option value="${p}" ${form.priority===p?"selected":""}>${p}</option>`).join("")}</select>
             </div>
             <div><label class="lbl">Category</label>
               <select onchange="sf('category',this.value)">
@@ -437,24 +395,19 @@ function render() {
           <div><label class="lbl">Follow-up date</label><input type="date" value="${esc(form.followUpDate)}" oninput="sf('followUpDate',this.value)"/></div>
           <div><label class="lbl">Deliverables</label><textarea oninput="sf('deliverables',this.value)" placeholder="e.g. 1 TikTok, 3 stories">${esc(form.deliverables)}</textarea></div>
           <div><label class="lbl">Status</label>
-            <select onchange="sf('status',this.value)">
-              ${STATUSES.map(s=>`<option value="${s}" ${form.status===s?"selected":""}>${s}</option>`).join("")}
-            </select>
+            <select onchange="sf('status',this.value)">${STATUSES.map(s=>`<option value="${s}" ${form.status===s?"selected":""}>${s}</option>`).join("")}</select>
           </div>
           <div><label class="lbl">Notes</label><textarea oninput="sf('notes',this.value)" placeholder="Any extra details…" style="min-height:70px;">${esc(form.notes)}</textarea></div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;">
           <div>
             ${modal!=="new"?(confirmDelete
-              ?`<span style="font-size:12px;color:#888;margin-right:8px;">Sure?</span>
-                <button onclick="doDelete()" style="font-size:12px;color:#E84040;border-color:#E84040;">Yes, delete</button>
-                <button onclick="state.confirmDelete=false;render()" style="font-size:12px;margin-left:6px;">Cancel</button>`
-              :`<button onclick="state.confirmDelete=true;render()" style="font-size:12px;color:#E84040;border-color:#E8404033;">Delete</button>`)
-            :""}
+              ?`<span style="font-size:12px;color:#888;margin-right:8px;">Sure?</span><button onclick="doDelete()" style="font-size:12px;color:#E84040;border-color:#E84040;">Yes, delete</button><button onclick="state.confirmDelete=false;render()" style="font-size:12px;margin-left:6px;">Cancel</button>`
+              :`<button onclick="state.confirmDelete=true;render()" style="font-size:12px;color:#E84040;border-color:#E8404033;">Delete</button>`):""}
           </div>
           <div style="display:flex;gap:10px;">
-            <button onclick="closeModal()" style="font-size:13px;">Cancel</button>
-            <button onclick="saveDeal()" style="background:#C9A84C;color:#0D0D0F;border-color:#C9A84C;font-weight:600;font-size:13px;">${modal==="new"?"Add Deal":"Save Changes"}</button>
+            <button onclick="closeModal()">Cancel</button>
+            <button onclick="saveDeal()" style="background:#C9A84C;color:#0D0D0F;border-color:#C9A84C;font-weight:600;">${modal==="new"?"Add Deal":"Save Changes"}</button>
           </div>
         </div>
       </div>
@@ -471,23 +424,18 @@ function render() {
           </div>
           <button onclick="closeEmailModal()" style="font-size:20px;padding:0 8px;border:none;color:#888;">✕</button>
         </div>
-
-        <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;">
+        <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap;">
           <label class="lbl" style="margin:0;white-space:nowrap;">Tone:</label>
-          ${["professional","friendly","firm","enthusiastic"].map(t=>`
-            <button class="pill ${emailTone===t?"active":""}" onclick="state.emailTone='${t}';render();">${t}</button>`).join("")}
-          <button onclick="generateEmail()" ${emailLoading?"disabled":""} style="margin-left:auto;background:#C9A84C;color:#0D0D0F;border-color:#C9A84C;font-weight:600;">
-            ${emailLoading?"Generating…":"✨ Generate"}
-          </button>
+          ${["professional","friendly","firm","enthusiastic"].map(t=>`<button class="pill ${emailTone===t?"active":""}" onclick="state.emailTone='${t}';render();">${t}</button>`).join("")}
+          <button onclick="generateEmail()" ${emailLoading?"disabled":""} style="margin-left:auto;background:#C9A84C;color:#0D0D0F;border-color:#C9A84C;font-weight:600;">${emailLoading?"Generating…":"✨ Generate"}</button>
         </div>
-
-        ${emailText?`
-        <div class="email-box">${esc(emailText)}</div>
-        <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;">
-          <button onclick="state.emailTone=state.emailTone;generateEmail()" style="font-size:13px;">↺ Regenerate</button>
-          <button class="copy-btn" onclick="copyEmail()" style="font-size:13px;">${copiedEmail?"✓ Copied!":"Copy to clipboard"}</button>
-        </div>`
-        :`<div style="text-align:center;color:#555;padding:40px 0;font-size:14px;">Hit Generate to draft your reply using AI</div>`}
+        ${emailText
+          ?`<div class="email-box">${esc(emailText)}</div>
+            <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;">
+              <button onclick="generateEmail()" style="font-size:13px;">↺ Regenerate</button>
+              <button class="copy-btn" onclick="copyEmail()">${copiedEmail?"✓ Copied!":"Copy to clipboard"}</button>
+            </div>`
+          :`<div style="text-align:center;color:#555;padding:40px 0;font-size:14px;">Hit Generate to draft your reply using AI</div>`}
       </div>
     </div>`:""}
   `;
@@ -506,10 +454,7 @@ function saveDeal(){
   else{state.deals=state.deals.map(d=>String(d.id)===String(state.form.id)?{...state.form}:d);}
   trySave();closeModal();
 }
-function openEmailModal(id){
-  const d=state.deals.find(x=>String(x.id)===String(id));
-  if(d){state.emailModal=d;state.emailText="";state.copiedEmail=false;render();}
-}
+function openEmailModal(id){const d=state.deals.find(x=>String(x.id)===String(id));if(d){state.emailModal=d;state.emailText="";state.copiedEmail=false;render();}}
 function closeEmailModal(){state.emailModal=null;state.emailText="";render();}
 
 render();
